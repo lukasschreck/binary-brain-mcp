@@ -1,0 +1,57 @@
+{
+  "name": "binary-brain-mcp",
+  "version": "0.1.0",
+  "description": "Your AI's long-term memory. Model-agnostic. Provider-independent.",
+  "type": "module",
+  "main": "dist/stdio.js",
+  "bin": {
+    "binary-brain-mcp": "./dist/setup/wizard.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev:stdio": "tsx src/stdio.ts",
+    "dev:http": "tsx src/http.ts",
+    "start": "node dist/stdio.js",
+    "start:http": "node dist/http.js",
+    "init": "tsx setup/wizard.ts",
+    "type-check": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "keywords": [
+    "mcp",
+    "ai-memory",
+    "claude",
+    "llm",
+    "second-brain",
+    "model-context-protocol",
+    "long-term-memory"
+  ],
+  "author": "Lukas Schreck <lukas@futursonanz.de>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lukasschreck/binary-brain-mcp.git"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.27.1",
+    "better-sqlite3": "^11.8.1",
+    "express": "^5.2.1",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.15.0",
+    "@types/pg": "^8.20.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "vitest": "^3.1.0"
+  },
+  "optionalDependencies": {
+    "@xenova/transformers": "^2.17.0",
+    "pg": "^8.13.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
