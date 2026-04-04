@@ -44,4 +44,7 @@ export interface StorageAdapter {
 
   /** Get forgotten memories (access_count=0, older than days) */
   forgotten(owner: string, olderThanDays: number, limit?: number): Promise<Memory[]>;
+
+  /** Increment access_count and update last_accessed_at */
+  touch(id: string): Promise<void>;
 }

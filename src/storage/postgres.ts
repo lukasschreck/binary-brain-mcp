@@ -40,15 +40,22 @@ interface PgRow {
   latest?: string;
 }
 
+function safeParse<T>(json: string | null, fallback: T): T {
+  if (!json) return fallback;
+  try { return JSON.parse(json) as T; } catch { return fallback; }
+}
+
 export class PostgresAdapter implements StorageAdapter {
   private pool: PgPool;
+  private dimensions: number;
 
-  constructor(private connectionString: string) {
+  constructor(private connectionString: string, dimensions: number = 256) {
     if (!pg) {
       throw new Error(
         'PostgreSQL adapter requires the "pg" package. Install it: npm install pg'
       );
     }
+    this.dimensions = dimensions;
     this.pool = new pg.Pool({ connectionString });
   }
 
@@ -67,7 +74,7 @@ export class PostgresAdapter implements StorageAdapter {
           domain TEXT,
           tags TEXT[] DEFAULT '{}',
           importance SMALLINT DEFAULT 5 CHECK (importance BETWEEN 1 AND 10),
-          embedding vector(256),
+          embedding vector(${this.dimensions}),
           access_count INT DEFAULT 0,
           last_accessed_at TIMESTAMPTZ,
           valid_until TIMESTAMPTZ,
@@ -327,6 +334,15 @@ export class PostgresAdapter implements StorageAdapter {
       [owner, olderThanDays, limit]
     );
     return result.rows.map((r: PgRow) => this.rowToMemory(r));
+  }
+
+  // --- Touch ---
+
+  async touch(id: string): Promise<void> {
+    await this.pool.query(
+      'UPDATE memories SET access_count = access_count + 1, last_accessed_at = NOW() WHERE id = $1',
+      [id]
+    );
   }
 
   // --- Helpers ---

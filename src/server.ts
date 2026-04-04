@@ -97,6 +97,9 @@ export function createBrainServer(
         };
       }
 
+      // Touch all source memories (increment access_count)
+      await Promise.all(results.map(r => storage.touch(r.id)));
+
       // Build synthesis context
       const sources = results.map((r, i) =>
         `[${i + 1}] [${r.category}] ${r.title} (Importance: ${r.importance})\n${r.content}`
@@ -171,6 +174,9 @@ export function createBrainServer(
         };
       }
 
+      // Touch all found memories (increment access_count)
+      await Promise.all(memories.map(r => storage.touch(r.id)));
+
       // Group by category
       const grouped = new Map<Category, typeof memories>();
       for (const m of memories) {
@@ -229,6 +235,9 @@ export function createBrainServer(
         };
       }
 
+      // Touch all results (increment access_count)
+      await Promise.all(memories.map(r => storage.touch(r.id)));
+
       const output = memories.map((m, i) =>
         `${i + 1}. [${m.category}] **${m.title}** (id: ${m.id}, importance: ${m.importance}${m.domain ? `, domain: ${m.domain}` : ''})\n   ${m.content.slice(0, 150)}${m.content.length > 150 ? '...' : ''}`
       ).join('\n\n');
@@ -267,6 +276,9 @@ export function createBrainServer(
         };
       }
 
+      // Touch all results (increment access_count)
+      await Promise.all(results.map(r => storage.touch(r.id)));
+
       const output = results.map((r, i) => {
         const sim = r.similarity !== undefined ? `, similarity: ${(r.similarity * 100).toFixed(0)}%` : '';
         return `${i + 1}. [${r.category}] **${r.title}** (id: ${r.id}${sim}, via: ${r.match_source})\n   ${r.content.slice(0, 150)}${r.content.length > 150 ? '...' : ''}`;
@@ -287,9 +299,9 @@ export function createBrainServer(
     'Kuratieren: Metadaten eines Memory pflegen — Tags, Importance, Domain, Category anpassen.',
     {
       id: z.string().describe('Memory UUID'),
-      title: z.string().optional().describe('Neuer Titel'),
-      content: z.string().optional().describe('Neuer Content (Summary)'),
-      raw_content: z.string().optional().describe('Neuer Raw Content'),
+      title: z.string().min(1).optional().describe('Neuer Titel'),
+      content: z.string().min(1).optional().describe('Neuer Content (Summary)'),
+      raw_content: z.string().min(1).optional().describe('Neuer Raw Content'),
       category: CategoryEnum.optional().describe('Neue Kategorie'),
       domain: z.string().optional().describe('Neue Domain'),
       tags: z.array(z.string()).optional().describe('Neue Tags'),

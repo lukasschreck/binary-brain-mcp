@@ -11,6 +11,10 @@ import type { Memory, MemoryWithSimilarity } from '../types.js';
 import { CATEGORY_LABELS, type Category } from '../types.js';
 import { prepareEmbeddingText } from '../embedding/provider.js';
 
+const THRESHOLD_CONNECTION = 0.5;    // Cross-domain matches need higher confidence
+const THRESHOLD_CRYSTAL = 0.85;      // Near-duplicate detection
+const MAX_CONNECTIONS = 10;
+
 export interface EmergeReport {
   surfaced: Memory[];             // Forgotten memories (access_count=0, >30d)
   connections: Connection[];       // Cross-domain semantic matches
@@ -45,6 +49,8 @@ export async function emerge(
   if (embedding.type !== 'none') {
     const allMemories = await storage.scan({ owner, limit: maxItems });
     const domainsMap = new Map<string, Memory[]>();
+    // Local cache for computed embeddings — avoids mutating Memory objects
+    const embeddingCache = new Map<string, number[]>();
 
     for (const m of allMemories) {
       const domain = m.domain ?? '__none__';
@@ -55,22 +61,27 @@ export async function emerge(
     const domains = [...domainsMap.keys()];
     if (domains.length >= 2) {
       // Take top 5 memories from each domain and cross-match
-      for (let i = 0; i < domains.length && connections.length < 10; i++) {
+      for (let i = 0; i < domains.length && connections.length < MAX_CONNECTIONS; i++) {
         const domainA = domains[i];
         const memoriesA = domainsMap.get(domainA)!.slice(0, 5);
 
         for (const memA of memoriesA) {
-          if (connections.length >= 10) break;
-          if (!memA.embedding || memA.embedding.length === 0) {
-            const vec = await embedding.embed(prepareEmbeddingText(memA.title, memA.content));
-            memA.embedding = vec;
+          if (connections.length >= MAX_CONNECTIONS) break;
+
+          let memAEmbedding = memA.embedding;
+          if (!memAEmbedding || memAEmbedding.length === 0) {
+            if (!embeddingCache.has(memA.id)) {
+              const vec = await embedding.embed(prepareEmbeddingText(memA.title, memA.content));
+              embeddingCache.set(memA.id, vec);
+            }
+            memAEmbedding = embeddingCache.get(memA.id)!;
           }
 
           // Search in other domains
           const crossMatches = await storage.vectorSearch(
-            memA.embedding,
+            memAEmbedding,
             { owner, limit: 3 },
-            0.5 // Higher threshold for meaningful connections
+            THRESHOLD_CONNECTION
           );
 
           for (const match of crossMatches) {
@@ -100,7 +111,7 @@ export async function emerge(
       if (processed.has(mem.id)) continue;
       if (!mem.embedding || mem.embedding.length === 0) continue;
 
-      const similar = await storage.vectorSearch(mem.embedding, { owner, limit: 5 }, 0.85);
+      const similar = await storage.vectorSearch(mem.embedding, { owner, limit: 5 }, THRESHOLD_CRYSTAL);
       const group = similar.filter(s => s.id !== mem.id && !processed.has(s.id));
 
       if (group.length > 0) {

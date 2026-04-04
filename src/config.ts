@@ -28,7 +28,12 @@ export function loadConfig(configPath?: string): BrainConfig {
   }
 
   const raw = readFileSync(path, 'utf-8');
-  const userConfig = JSON.parse(raw) as Partial<BrainConfig>;
+  let userConfig: Partial<BrainConfig>;
+  try {
+    userConfig = JSON.parse(raw) as Partial<BrainConfig>;
+  } catch (err) {
+    throw new Error(`Failed to parse config file at ${path}: ${err instanceof Error ? err.message : String(err)}`);
+  }
 
   const config: BrainConfig = {
     ...DEFAULT_CONFIG,

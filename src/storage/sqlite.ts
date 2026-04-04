@@ -12,6 +12,11 @@ import { dirname } from 'node:path';
 import type { StorageAdapter, MemoryInsert } from './adapter.js';
 import type { Memory, MemoryWithSimilarity, ScanFilter, CategoryStats, Category } from '../types.js';
 
+function safeParse<T>(json: string | null, fallback: T): T {
+  if (!json) return fallback;
+  try { return JSON.parse(json) as T; } catch { return fallback; }
+}
+
 export class SQLiteAdapter implements StorageAdapter {
   private db: Database.Database;
 
@@ -215,7 +220,7 @@ export class SQLiteAdapter implements StorageAdapter {
     // In-memory cosine similarity
     const results: MemoryWithSimilarity[] = [];
     for (const row of rows) {
-      const memEmbedding = JSON.parse(row.embedding as string) as number[];
+      const memEmbedding = safeParse<number[]>(row.embedding as string, []);
       const similarity = cosineSimilarity(embedding, memEmbedding);
       if (similarity >= threshold) {
         results.push({ ...this.rowToMemory(row), similarity });
@@ -279,6 +284,14 @@ export class SQLiteAdapter implements StorageAdapter {
     return rows.map(r => this.rowToMemory(r));
   }
 
+  // --- Touch ---
+
+  async touch(id: string): Promise<void> {
+    this.db.prepare(
+      "UPDATE memories SET access_count = access_count + 1, last_accessed_at = datetime('now') WHERE id = ?"
+    ).run(id);
+  }
+
   // --- Helpers ---
 
   private mustGetById(id: string): Memory {
@@ -296,8 +309,8 @@ export class SQLiteAdapter implements StorageAdapter {
     if (filter.category) { conditions.push('category = ?'); params.push(filter.category); }
     if (filter.domain) { conditions.push('domain = ?'); params.push(filter.domain); }
     if (filter.tag) {
-      conditions.push("tags LIKE ?");
-      params.push(`%"${filter.tag}"%`);
+      conditions.push("EXISTS (SELECT 1 FROM json_each(tags) WHERE json_each.value = ?)");
+      params.push(filter.tag);
     }
     if (!filter.include_expired) {
       conditions.push("(valid_until IS NULL OR valid_until > datetime('now'))");
@@ -318,9 +331,9 @@ export class SQLiteAdapter implements StorageAdapter {
       content: row.content,
       raw_content: row.raw_content ?? undefined,
       domain: row.domain ?? undefined,
-      tags: JSON.parse(row.tags ?? '[]'),
+      tags: safeParse<string[]>(row.tags, []),
       importance: row.importance,
-      embedding: row.embedding ? JSON.parse(row.embedding) : undefined,
+      embedding: row.embedding ? safeParse<number[] | undefined>(row.embedding, undefined) : undefined,
       access_count: row.access_count,
       last_accessed_at: row.last_accessed_at ? new Date(row.last_accessed_at) : undefined,
       valid_until: row.valid_until ? new Date(row.valid_until) : undefined,

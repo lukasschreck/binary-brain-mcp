@@ -18,17 +18,17 @@ export interface BrainComponents {
 export async function bootstrap(configPath?: string): Promise<BrainComponents> {
   const config = loadConfig(configPath);
 
-  // Storage
-  const storage = await createStorage(config);
-  await storage.initialize();
-
-  // Embedding
+  // Embedding first — we need dimensions for storage
   const embedding = await createEmbedding(config);
+
+  // Storage
+  const storage = await createStorage(config, embedding.dimensions);
+  await storage.initialize();
 
   return { config, storage, embedding };
 }
 
-async function createStorage(config: BrainConfig): Promise<StorageAdapter> {
+async function createStorage(config: BrainConfig, embeddingDimensions: number): Promise<StorageAdapter> {
   switch (config.storage) {
     case 'sqlite': {
       const path = config.sqlite?.path ?? `${config.dataDir}/brain.db`;
@@ -39,7 +39,7 @@ async function createStorage(config: BrainConfig): Promise<StorageAdapter> {
         throw new Error('PostgreSQL requires postgres.connectionString in config.');
       }
       const { PostgresAdapter } = await import('./storage/postgres.js');
-      return new PostgresAdapter(config.postgres.connectionString);
+      return new PostgresAdapter(config.postgres.connectionString, embeddingDimensions || 256);
     }
     default:
       throw new Error(`Unknown storage backend: ${config.storage}`);
