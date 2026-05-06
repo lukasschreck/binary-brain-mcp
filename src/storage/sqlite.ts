@@ -312,6 +312,11 @@ export class SQLiteAdapter implements StorageAdapter {
       conditions.push("EXISTS (SELECT 1 FROM json_each(tags) WHERE json_each.value = ?)");
       params.push(filter.tag);
     }
+
+    const dateField = filter.date_field ?? 'created_at';
+    if (filter.since) { conditions.push(`${dateField} >= ?`); params.push(filter.since.toISOString()); }
+    if (filter.until) { conditions.push(`${dateField} <= ?`); params.push(filter.until.toISOString()); }
+
     if (!filter.include_expired) {
       conditions.push("(valid_until IS NULL OR valid_until > datetime('now'))");
     }

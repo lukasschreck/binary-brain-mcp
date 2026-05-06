@@ -311,6 +311,81 @@ describe('SQLiteAdapter', () => {
       expect(results.length).toBe(5);
     });
 
+    it('should filter by since (date range, lower bound)', async () => {
+      // Backdate half the memories to 10 days ago
+      const tenDaysAgo = new Date(Date.now() - 10 * 86_400_000).toISOString();
+      const all = await adapter.scan({ owner: GOLDEN_OWNER, limit: 100 });
+      const half = all.slice(0, Math.floor(all.length / 2));
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const db = (adapter as any).db;
+      for (const m of half) {
+        db.prepare('UPDATE memories SET created_at = ? WHERE id = ?').run(tenDaysAgo, m.id);
+      }
+
+      const since = new Date(Date.now() - 86_400_000); // 1 day ago
+      const recent = await adapter.scan({ owner: GOLDEN_OWNER, since, limit: 100 });
+      expect(recent.length).toBe(all.length - half.length);
+      for (const r of recent) {
+        expect(r.created_at.getTime()).toBeGreaterThanOrEqual(since.getTime());
+      }
+    });
+
+    it('should filter by until (date range, upper bound)', async () => {
+      const tenDaysAgo = new Date(Date.now() - 10 * 86_400_000).toISOString();
+      const all = await adapter.scan({ owner: GOLDEN_OWNER, limit: 100 });
+      const half = all.slice(0, Math.floor(all.length / 2));
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const db = (adapter as any).db;
+      for (const m of half) {
+        db.prepare('UPDATE memories SET created_at = ? WHERE id = ?').run(tenDaysAgo, m.id);
+      }
+
+      const until = new Date(Date.now() - 86_400_000); // 1 day ago
+      const old = await adapter.scan({ owner: GOLDEN_OWNER, until, limit: 100 });
+      expect(old.length).toBe(half.length);
+      for (const r of old) {
+        expect(r.created_at.getTime()).toBeLessThanOrEqual(until.getTime());
+      }
+    });
+
+    it('should combine since + until (date window)', async () => {
+      // Backdate three memories to distinct points
+      const all = await adapter.scan({ owner: GOLDEN_OWNER, limit: 100 });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const db = (adapter as any).db;
+      const t20 = new Date(Date.now() - 20 * 86_400_000).toISOString();
+      const t10 = new Date(Date.now() - 10 * 86_400_000).toISOString();
+      const t5 = new Date(Date.now() - 5 * 86_400_000).toISOString();
+      db.prepare('UPDATE memories SET created_at = ? WHERE id = ?').run(t20, all[0].id);
+      db.prepare('UPDATE memories SET created_at = ? WHERE id = ?').run(t10, all[1].id);
+      db.prepare('UPDATE memories SET created_at = ? WHERE id = ?').run(t5, all[2].id);
+
+      const since = new Date(Date.now() - 15 * 86_400_000);
+      const until = new Date(Date.now() - 7 * 86_400_000);
+      const window = await adapter.scan({ owner: GOLDEN_OWNER, since, until, limit: 100 });
+      // Only the t10 memory falls into [-15d, -7d]
+      expect(window.length).toBe(1);
+      expect(window[0].id).toBe(all[1].id);
+    });
+
+    it('should respect date_field=updated_at', async () => {
+      const all = await adapter.scan({ owner: GOLDEN_OWNER, limit: 100 });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const db = (adapter as any).db;
+      const oldUpdate = new Date(Date.now() - 10 * 86_400_000).toISOString();
+      // Push half the rows updated_at into the past, leave created_at untouched
+      const half = all.slice(0, Math.floor(all.length / 2));
+      for (const m of half) {
+        db.prepare('UPDATE memories SET updated_at = ? WHERE id = ?').run(oldUpdate, m.id);
+      }
+
+      const since = new Date(Date.now() - 86_400_000);
+      const recentByUpdated = await adapter.scan({
+        owner: GOLDEN_OWNER, since, date_field: 'updated_at', limit: 100,
+      });
+      expect(recentByUpdated.length).toBe(all.length - half.length);
+    });
+
     it('should exclude expired by default', async () => {
       // Insert an expired memory
       await adapter.insert({

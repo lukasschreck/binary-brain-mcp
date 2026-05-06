@@ -18,7 +18,7 @@ Then start a conversation:
 
 > "brain_ingest a new anchor: We chose PostgreSQL because we need pgvector for semantic search."
 
-## The 8 Tools
+## The 9 Tools
 
 | Tool | What it does | Metaphor |
 |------|-------------|----------|
@@ -26,10 +26,13 @@ Then start a conversation:
 | `brain_compose` | Synthesize N memories into something new | **Komponieren** — create a new symphony from existing parts |
 | `brain_decompose` | Deep-dive into a topic across all memories | **Kompostieren** — break down into rich, fertile context |
 | `brain_search` | Filter by category, tags, domain, owner | **Suchen** — open the right drawer, find exactly what you need |
+| `brain_scan` | Time-window filter (since/until) with timestamps in output | **Zeitfenster** — what entered the brain in this window? |
 | `brain_find` | Intelligent search (fulltext + vector) | **Finden** — explore openly, discover what's relevant |
 | `brain_curate` | Update metadata (tags, importance, domain) | **Kuratieren** — label, classify, maintain your collection |
 | `brain_dissolve` | Remove a memory | **Auflösen** — a memory dissolves |
 | `brain_emerge` | Discover patterns, surface forgotten knowledge | **Auftauchen** — hidden connections rise to the surface |
+
+`brain_search`, `brain_find`, and `brain_scan` accept `verbosity: 'compact' | 'full'` and `include_raw_content: boolean` for full content + raw transcript output. Default is compact (150–200 char preview).
 
 ### Why these names?
 

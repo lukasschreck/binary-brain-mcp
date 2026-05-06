@@ -1,10 +1,11 @@
 /**
- * Binary Brain MCP — Server with 8 Tools.
+ * Binary Brain MCP — Server with 9 Tools.
  *
  * brain_ingest    — Neues Wissen aufnehmen
  * brain_compose   — Synthese aus N Memories
  * brain_decompose — Tiefenbohrung zu einem Thema
  * brain_search    — Gezieltes Filtern
+ * brain_scan      — Zeitfenster-Filter (since/until + Timestamps im Output)
  * brain_find      — Ergebnisoffene Suche
  * brain_curate    — Metadaten pflegen
  * brain_dissolve  — Memory auflösen
@@ -18,9 +19,58 @@ import type { EmbeddingProvider } from './embedding/provider.js';
 import { prepareEmbeddingText } from './embedding/provider.js';
 import { find } from './search/find.js';
 import { emerge } from './emerge/emerge.js';
-import { CATEGORIES, CATEGORY_LABELS, type Category } from './types.js';
+import { CATEGORIES, CATEGORY_LABELS, type Category, type Memory } from './types.js';
 
 const CategoryEnum = z.enum(CATEGORIES as unknown as [string, ...string[]]);
+
+// --- Shared rendering helper ---
+interface RenderOptions {
+  verbosity?: 'compact' | 'full';
+  include_raw_content?: boolean;
+  /** Extra inline note appended to the meta line (e.g. similarity) */
+  extraMeta?: string;
+  /** Default truncate length when verbosity='compact' */
+  truncate?: number;
+}
+
+function renderMemoryEntry(m: Memory, index: number, opts: RenderOptions = {}): string {
+  const verbosity = opts.verbosity ?? 'compact';
+  const truncate = opts.truncate ?? 150;
+  const lines: string[] = [];
+  lines.push(`### ${index + 1}. [${m.category}] ${m.title}`);
+
+  const meta: string[] = [
+    `id: \`${m.id}\``,
+    `importance: ${m.importance}`,
+    ...(m.domain ? [`domain: \`${m.domain}\``] : []),
+    `created_at: ${m.created_at.toISOString()}`,
+    `updated_at: ${m.updated_at.toISOString()}`,
+    `access_count: ${m.access_count}`,
+    ...(m.last_accessed_at ? [`last_accessed_at: ${m.last_accessed_at.toISOString()}`] : []),
+    ...(m.valid_until ? [`valid_until: ${m.valid_until.toISOString()}`] : []),
+    ...(opts.extraMeta ? [opts.extraMeta] : []),
+  ];
+  lines.push(`- ${meta.join(' · ')}`);
+
+  if (m.tags && m.tags.length > 0) {
+    lines.push(`- tags: ${m.tags.map(t => `\`${t}\``).join(', ')}`);
+  }
+
+  const content = verbosity === 'full'
+    ? m.content
+    : (m.content.length > truncate ? `${m.content.slice(0, truncate)}…` : m.content);
+  lines.push('');
+  lines.push('**content:**');
+  lines.push(content);
+
+  if (opts.include_raw_content && m.raw_content) {
+    lines.push('');
+    lines.push('**raw_content:**');
+    lines.push(m.raw_content);
+  }
+
+  return lines.join('\n');
+}
 
 export function createBrainServer(
   storage: StorageAdapter,
@@ -210,7 +260,7 @@ export function createBrainServer(
   // --- brain_search ---
   server.tool(
     'brain_search',
-    'Gezieltes Suchen: Strukturiertes Filtern nach Owner, Category, Domain, Tags.',
+    'Gezieltes Suchen: Strukturiertes Filtern nach Owner, Category, Domain, Tags. Mit verbosity="full" wird der komplette content statt Truncate ausgegeben; mit include_raw_content=true zusaetzlich der Volltext.',
     {
       owner: z.string().default(defaultOwner).describe('Owner-Filter'),
       category: CategoryEnum.optional().describe('Kategorie-Filter'),
@@ -218,6 +268,8 @@ export function createBrainServer(
       tag: z.string().optional().describe('Tag-Filter'),
       limit: z.number().min(1).max(100).default(20).describe('Max Ergebnisse'),
       sort_by: z.enum(['importance', 'created_at', 'updated_at', 'access_count']).default('importance').describe('Sortierung'),
+      verbosity: z.enum(['compact', 'full']).default('compact').describe('compact: 150-Zeichen-Truncate. full: kompletter content.'),
+      include_raw_content: z.boolean().default(false).describe('Wenn true, raw_content (Volltext) zusaetzlich ausgeben.'),
     },
     async (args) => {
       const memories = await storage.scan({
@@ -239,8 +291,8 @@ export function createBrainServer(
       await Promise.all(memories.map(r => storage.touch(r.id)));
 
       const output = memories.map((m, i) =>
-        `${i + 1}. [${m.category}] **${m.title}** (id: ${m.id}, importance: ${m.importance}${m.domain ? `, domain: ${m.domain}` : ''})\n   ${m.content.slice(0, 150)}${m.content.length > 150 ? '...' : ''}`
-      ).join('\n\n');
+        renderMemoryEntry(m, i, { verbosity: args.verbosity, include_raw_content: args.include_raw_content })
+      ).join(args.verbosity === 'full' || args.include_raw_content ? '\n\n---\n\n' : '\n\n');
 
       return {
         content: [{
@@ -251,16 +303,108 @@ export function createBrainServer(
     }
   );
 
+  // --- brain_scan ---
+  server.tool(
+    'brain_scan',
+    'Zeitfenster-Scan: Memories aus einem Datums-Range listen — mit echten Timestamps und allen Metadaten im Output (Tags, Domain, access_count, updated_at). Mit verbosity="full" auch der komplette content statt Truncate; mit include_raw_content=true zusaetzlich das ungekuerzte Original. Gut fuer "letzte 48h", "seit letzter Woche", oder gezielte ISO-Date-Bereiche. Default Sortierung: created_at DESC.',
+    {
+      owner: z.string().default(defaultOwner).describe('Owner-Filter'),
+      category: CategoryEnum.optional().describe('Kategorie-Filter'),
+      domain: z.string().optional().describe('Domain-Filter'),
+      tag: z.string().optional().describe('Tag-Filter (genau ein Tag)'),
+      since: z.string().optional().describe('ISO 8601 untere Grenze, inkl. (z.B. "2026-05-04T00:00:00Z")'),
+      until: z.string().optional().describe('ISO 8601 obere Grenze, inkl.'),
+      since_hours_ago: z.number().min(0).optional().describe('Convenience: untere Grenze als Stunden zurueck. Wird ignoriert wenn since gesetzt ist.'),
+      since_days_ago: z.number().min(0).optional().describe('Convenience: untere Grenze als Tage zurueck. since > since_hours_ago > since_days_ago.'),
+      date_field: z.enum(['created_at', 'updated_at']).default('created_at').describe('Welches Datum zaehlt fuer since/until.'),
+      limit: z.number().min(1).max(200).default(50).describe('Max Ergebnisse'),
+      sort_by: z.enum(['created_at', 'updated_at', 'importance', 'access_count']).default('created_at').describe('Sortierung (created_at = neueste zuerst)'),
+      verbosity: z.enum(['compact', 'full']).default('compact').describe('compact: 200-Zeichen-Truncate. full: kompletter content.'),
+      include_raw_content: z.boolean().default(false).describe('Wenn true, raw_content (Volltext / Originaltranskript) zusaetzlich ausgeben.'),
+      include_expired: z.boolean().default(false).describe('Wenn true, auch abgelaufene Memories einbeziehen (valid_until in der Vergangenheit).'),
+    },
+    async (args) => {
+      // Resolve since: explicit > hours > days
+      let since: Date | undefined;
+      if (args.since) {
+        const parsed = new Date(args.since);
+        if (Number.isNaN(parsed.getTime())) {
+          return { content: [{ type: 'text' as const, text: `Ungueltiges since-Datum: "${args.since}". Erwartet ISO 8601.` }] };
+        }
+        since = parsed;
+      } else if (args.since_hours_ago !== undefined) {
+        since = new Date(Date.now() - args.since_hours_ago * 3_600_000);
+      } else if (args.since_days_ago !== undefined) {
+        since = new Date(Date.now() - args.since_days_ago * 86_400_000);
+      }
+
+      let until: Date | undefined;
+      if (args.until) {
+        const parsed = new Date(args.until);
+        if (Number.isNaN(parsed.getTime())) {
+          return { content: [{ type: 'text' as const, text: `Ungueltiges until-Datum: "${args.until}". Erwartet ISO 8601.` }] };
+        }
+        until = parsed;
+      }
+
+      const memories = await storage.scan({
+        owner: args.owner,
+        category: args.category as Category | undefined,
+        domain: args.domain,
+        tag: args.tag,
+        limit: args.limit,
+        sort_by: args.sort_by,
+        since,
+        until,
+        date_field: args.date_field,
+        include_expired: args.include_expired,
+      });
+
+      if (memories.length === 0) {
+        const range = since || until
+          ? ` (${since ? since.toISOString() : '-∞'} → ${until ? until.toISOString() : 'jetzt'})`
+          : '';
+        return { content: [{ type: 'text' as const, text: `Keine Memories im Zeitfenster${range} gefunden.` }] };
+      }
+
+      // Touch all results
+      await Promise.all(memories.map(r => storage.touch(r.id)));
+
+      const header = [
+        `${memories.length} Memories`,
+        since ? `seit ${since.toISOString()}` : null,
+        until ? `bis ${until.toISOString()}` : null,
+        `sortiert nach ${args.sort_by}`,
+        `verbosity=${args.verbosity}`,
+        args.include_raw_content ? 'mit raw_content' : null,
+      ].filter(Boolean).join(', ');
+
+      const output = memories.map((m, i) =>
+        renderMemoryEntry(m, i, {
+          verbosity: args.verbosity,
+          include_raw_content: args.include_raw_content,
+          truncate: 200,
+        })
+      ).join('\n\n---\n\n');
+
+      return {
+        content: [{ type: 'text' as const, text: `${header}:\n\n${output}` }],
+      };
+    }
+  );
+
   // --- brain_find ---
   server.tool(
     'brain_find',
-    'Ergebnisoffenes Finden: Intelligente Suche über FTS + Vektor (wenn verfügbar). Für Fragen und explorative Suchen.',
+    'Ergebnisoffenes Finden: Intelligente Suche ueber FTS + Vektor (wenn verfuegbar). Fuer Fragen und explorative Suchen. Mit verbosity="full" wird der komplette content statt Truncate ausgegeben; mit include_raw_content=true zusaetzlich der Volltext.',
     {
       query: z.string().describe('Suchbegriff oder Frage'),
       owner: z.string().default(defaultOwner).describe('Owner-Filter'),
       category: CategoryEnum.optional().describe('Optional: Kategorie-Filter'),
       domain: z.string().optional().describe('Optional: Domain-Filter'),
       limit: z.number().min(1).max(50).default(10).describe('Max Ergebnisse'),
+      verbosity: z.enum(['compact', 'full']).default('compact').describe('compact: 150-Zeichen-Truncate. full: kompletter content.'),
+      include_raw_content: z.boolean().default(false).describe('Wenn true, raw_content (Volltext) zusaetzlich ausgeben.'),
     },
     async (args) => {
       const results = await find(args.query, storage, embedding, {
@@ -280,9 +424,15 @@ export function createBrainServer(
       await Promise.all(results.map(r => storage.touch(r.id)));
 
       const output = results.map((r, i) => {
-        const sim = r.similarity !== undefined ? `, similarity: ${(r.similarity * 100).toFixed(0)}%` : '';
-        return `${i + 1}. [${r.category}] **${r.title}** (id: ${r.id}${sim}, via: ${r.match_source})\n   ${r.content.slice(0, 150)}${r.content.length > 150 ? '...' : ''}`;
-      }).join('\n\n');
+        const simNote = r.similarity !== undefined
+          ? ` · similarity: ${(r.similarity * 100).toFixed(0)}% · via: ${r.match_source}`
+          : ` · via: ${r.match_source}`;
+        return renderMemoryEntry(r, i, {
+          verbosity: args.verbosity,
+          include_raw_content: args.include_raw_content,
+          extraMeta: simNote.replace(/^ · /, ''),
+        });
+      }).join(args.verbosity === 'full' || args.include_raw_content ? '\n\n---\n\n' : '\n\n');
 
       return {
         content: [{

@@ -69,6 +69,12 @@ export interface ScanFilter {
   limit?: number;
   sort_by?: 'importance' | 'created_at' | 'updated_at' | 'access_count';
   include_expired?: boolean;
+  /** Lower bound (inclusive) — matches against created_at by default, updated_at if date_field='updated_at'. */
+  since?: Date;
+  /** Upper bound (inclusive). */
+  until?: Date;
+  /** Which timestamp column the since/until bounds apply to. Default: 'created_at'. */
+  date_field?: 'created_at' | 'updated_at';
 }
 
 // --- Stats ---

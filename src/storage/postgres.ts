@@ -358,6 +358,11 @@ export class PostgresAdapter implements StorageAdapter {
     if (filter.category) { conditions.push(`category = $${paramIdx++}`); params.push(filter.category); }
     if (filter.domain) { conditions.push(`domain = $${paramIdx++}`); params.push(filter.domain); }
     if (filter.tag) { conditions.push(`$${paramIdx++} = ANY(tags)`); params.push(filter.tag); }
+
+    const dateField = filter.date_field ?? 'created_at';
+    if (filter.since) { conditions.push(`${dateField} >= $${paramIdx++}`); params.push(filter.since.toISOString()); }
+    if (filter.until) { conditions.push(`${dateField} <= $${paramIdx++}`); params.push(filter.until.toISOString()); }
+
     if (!filter.include_expired) {
       conditions.push('(valid_until IS NULL OR valid_until > NOW())');
     }
