@@ -1,0 +1,146 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://binary-brain-mcp.futursonanz.local/specs/entity/entity_find/0.1.0",
+  "specVersion": "0.1.0",
+  "tool": {
+    "name": "entity_find",
+    "description": "Telefonbuch-Lookup. Finde eine Entity (Person/Organisation/Konzept/Buch/Werk/Ort) per Name oder Alias und liefere alle Mentions cross-realm (brain, futursonanz, library).",
+    "purpose": "Disambiguierung + Cross-Realm-Übersicht. Beispiel: 'Wer ist Andreas Weber?' → ein kanonischer Entity-Eintrag + 3 Mentions (Brain-Node, Library-Author, Futursonanz-Signal-Tag).",
+    "readOnly": true,
+    "impact": "low"
+  },
+  "inputSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "query": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 200,
+        "description": "Name oder Alias der gesuchten Entity. Beispiele: 'Becci', 'Andreas Weber', 'Energiewende'."
+      },
+      "entity_type": {
+        "type": "string",
+        "enum": ["person", "organization", "concept", "book", "work", "place"],
+        "description": "Optional: Type-Filter aus Welt-Modell entity-types.md."
+      },
+      "realm_filter": {
+        "type": "array",
+        "items": { "type": "string", "enum": ["brain", "futursonanz", "library"] },
+        "uniqueItems": true,
+        "description": "Optional: Nur Mentions aus diesen Räumen zurückgeben."
+      },
+      "limit": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 20,
+        "default": 5,
+        "description": "Max Anzahl Entities (bei Ambiguität mehrere Kandidaten)."
+      }
+    },
+    "required": ["query"]
+  },
+  "outputSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "entities": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "id": { "type": "string", "format": "uuid" },
+            "canonical_name": { "type": "string" },
+            "entity_type": { "type": "string", "enum": ["person", "organization", "concept", "book", "work", "place"] },
+            "aliases": { "type": "array", "items": { "type": "string" } },
+            "notes": { "type": ["string", "null"] },
+            "mentions": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "realm": { "type": "string", "enum": ["brain", "futursonanz", "library"] },
+                  "realm_table": { "type": "string" },
+                  "realm_id": { "type": "string" },
+                  "realm_field": { "type": ["string", "null"] },
+                  "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+                },
+                "required": ["realm", "realm_table", "realm_id", "confidence"]
+              }
+            },
+            "world_model_version": { "type": "string" }
+          },
+          "required": ["id", "canonical_name", "entity_type", "aliases", "mentions"]
+        }
+      },
+      "match_count": { "type": "integer", "minimum": 0 },
+      "ambiguous": { "type": "boolean", "description": "true wenn mehrere Kandidaten zurückkamen, LLM soll disambiguieren" }
+    },
+    "required": ["entities", "match_count", "ambiguous"]
+  },
+  "errorSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "code": {
+        "type": "string",
+        "enum": ["NOT_FOUND", "INVALID_INPUT", "INTERNAL_ERROR"]
+      },
+      "message": { "type": "string" }
+    },
+    "required": ["code", "message"]
+  },
+  "examples": [
+    {
+      "name": "happy-path-single",
+      "input": { "query": "Andreas Weber" },
+      "output": {
+        "entities": [{
+          "id": "9086b386-f052-440d-8303-a8398874b131",
+          "canonical_name": "Andreas Weber",
+          "entity_type": "person",
+          "aliases": ["Weber, Andreas", "A. Weber"],
+          "notes": "Philosoph, Biosemiotik, Heart-Space-Resonanz",
+          "mentions": [
+            {
+              "realm": "brain",
+              "realm_table": "memories",
+              "realm_id": "9086b386-f052-440d-8303-a8398874b131",
+              "realm_field": null,
+              "confidence": 1.0
+            },
+            {
+              "realm": "library",
+              "realm_table": "authors",
+              "realm_id": "andreas-weber",
+              "realm_field": null,
+              "confidence": 1.0
+            }
+          ],
+          "world_model_version": "2026.05-v1"
+        }],
+        "match_count": 1,
+        "ambiguous": false
+      }
+    },
+    {
+      "name": "edge-case-ambiguous-name",
+      "input": { "query": "Andreas Weber", "entity_type": "person" },
+      "output": {
+        "entities": [
+          { "id": "9086b386-f052-440d-8303-a8398874b131", "canonical_name": "Andreas Weber", "entity_type": "person", "aliases": ["Philosoph"], "notes": "Biosemiotik", "mentions": [], "world_model_version": "2026.05-v1" },
+          { "id": "00000000-0000-0000-0000-000000000001", "canonical_name": "Andreas Weber", "entity_type": "person", "aliases": ["Politiker"], "notes": "FDP", "mentions": [], "world_model_version": "2026.05-v1" }
+        ],
+        "match_count": 2,
+        "ambiguous": true
+      }
+    },
+    {
+      "name": "edge-case-not-found",
+      "input": { "query": "Mxyzptlk" },
+      "output": { "entities": [], "match_count": 0, "ambiguous": false }
+    }
+  ]
+}

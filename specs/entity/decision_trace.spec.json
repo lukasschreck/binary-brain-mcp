@@ -1,0 +1,144 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://binary-brain-mcp.futursonanz.local/specs/entity/decision_trace/0.1.0",
+  "specVersion": "0.1.0",
+  "tool": {
+    "name": "decision_trace",
+    "description": "Quellen-Chain für einen Anchor. Liefere die Memories/Signals/Bücher die wahrscheinlich zur Entscheidung beigetragen haben — mit Rolle (evidence/trigger/counter), Score und optional Confirmation-Status.",
+    "purpose": "Nachvollziehbarkeit von Entscheidungen. Beispiel: 'Wie kam der Anchor Skills-sind-Träger zustande?' → 3 Trigger-Memories, 5 Evidence-Memories, 1 Counter-Befund.",
+    "readOnly": true,
+    "impact": "low",
+    "worldModelDependency": "predicate-vocabulary.md (Rollen evidence/trigger/counter)"
+  },
+  "inputSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "anchor_realm_id": {
+        "type": "string",
+        "description": "Die Anchor-Memory-ID im Brain (oder Library/Futursonanz, falls Anchor cross-realm). Typischerweise eine Brain-Memory-UUID."
+      },
+      "anchor_realm": {
+        "type": "string",
+        "enum": ["brain", "futursonanz", "library"],
+        "default": "brain",
+        "description": "Welcher Raum hostet den Anchor."
+      },
+      "include_unmatched_note": {
+        "type": "boolean",
+        "default": true,
+        "description": "true: falls keine starken Quellen identifiziert, gib eine Erklärung mit."
+      },
+      "roles_filter": {
+        "type": "array",
+        "items": { "type": "string", "enum": ["evidence", "trigger", "counter"] },
+        "uniqueItems": true,
+        "description": "Optional: nur Traces dieser Rollen liefern."
+      },
+      "min_score": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 1,
+        "default": 0.5
+      }
+    },
+    "required": ["anchor_realm_id"]
+  },
+  "outputSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "trace_id": { "type": "string", "format": "uuid", "description": "ID des decision_traces-Eintrags." },
+      "anchor": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "realm": { "type": "string", "enum": ["brain", "futursonanz", "library"] },
+          "realm_id": { "type": "string" },
+          "created_at": { "type": "string", "format": "date-time" }
+        },
+        "required": ["realm", "realm_id", "created_at"]
+      },
+      "traces": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "source_realm": { "type": "string", "enum": ["brain", "futursonanz", "library"] },
+            "source_realm_id": { "type": "string" },
+            "source_title_preview": { "type": "string", "description": "Erste ~120 Zeichen für UI-Display." },
+            "role": { "type": "string", "enum": ["evidence", "trigger", "counter"] },
+            "score": { "type": "number", "minimum": 0, "maximum": 1 },
+            "reason": { "type": "string", "maxLength": 200, "description": "Kurz-Begründung warum diese Quelle." },
+            "confirmed_by_lukas": { "type": "boolean", "description": "true wenn Lukas im /curator bestätigt hat, false wenn noch proposed." }
+          },
+          "required": ["source_realm", "source_realm_id", "role", "score", "reason", "confirmed_by_lukas"]
+        }
+      },
+      "unmatched_note": { "type": ["string", "null"], "description": "Hinweis falls keine sicheren Quellen identifiziert wurden." },
+      "lookback_days_used": { "type": "integer", "minimum": 1 },
+      "llm_decision_id": { "type": ["string", "null"], "format": "uuid" },
+      "world_model_version": { "type": "string" }
+    },
+    "required": ["trace_id", "anchor", "traces", "lookback_days_used", "world_model_version"]
+  },
+  "errorSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "code": {
+        "type": "string",
+        "enum": ["ANCHOR_NOT_FOUND", "NO_TRACE_YET", "INVALID_INPUT", "INTERNAL_ERROR"]
+      },
+      "message": { "type": "string" }
+    },
+    "required": ["code", "message"]
+  },
+  "examples": [
+    {
+      "name": "happy-path-skills-anchor",
+      "input": {
+        "anchor_realm_id": "33a260db-6b85-4787-8616-5c474c5cb0f5",
+        "anchor_realm": "brain"
+      },
+      "output": {
+        "trace_id": "66666666-6666-6666-6666-666666666666",
+        "anchor": {
+          "realm": "brain",
+          "realm_id": "33a260db-6b85-4787-8616-5c474c5cb0f5",
+          "created_at": "2026-05-16T22:22:45Z"
+        },
+        "traces": [
+          {
+            "source_realm": "brain",
+            "source_realm_id": "cbe7df99-8dec-473c-be6f-2649a5ff2be5",
+            "source_title_preview": "Status-Gespräch Schwarm × Lukas in Achern (14.05.): Bearing-Partner-Einladung + Second-Tier-Knowledge-Base-Diagnose",
+            "role": "trigger",
+            "score": 0.95,
+            "reason": "Achern-Gespräch 3 Tage vor Anchor — direkter Auslöser",
+            "confirmed_by_lukas": true
+          },
+          {
+            "source_realm": "brain",
+            "source_realm_id": "b99724db-4e5c-4ddc-9dc2-f5e5550c2843",
+            "source_title_preview": "100 Bausteine — Lukas' As-is-Wesen-Inventur (Mai 2026, zwei Nacht-Sessions)",
+            "role": "evidence",
+            "score": 0.88,
+            "reason": "Inventur lieferte die Skills-vs-Wesen-Material-Basis",
+            "confirmed_by_lukas": true
+          }
+        ],
+        "unmatched_note": null,
+        "lookback_days_used": 21,
+        "llm_decision_id": "77777777-7777-7777-7777-777777777777",
+        "world_model_version": "2026.05-v1"
+      }
+    },
+    {
+      "name": "edge-case-no-trace-yet",
+      "input": { "anchor_realm_id": "99999999-9999-9999-9999-999999999999" },
+      "error": { "code": "NO_TRACE_YET", "message": "Anchor existiert, aber Trace-Detector ist noch nicht gelaufen oder hat keine Quellen >= min_score gefunden." }
+    }
+  ]
+}

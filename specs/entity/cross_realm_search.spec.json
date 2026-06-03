@@ -1,0 +1,174 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://binary-brain-mcp.futursonanz.local/specs/entity/cross_realm_search/0.1.0",
+  "specVersion": "0.1.0",
+  "tool": {
+    "name": "cross_realm_search",
+    "description": "Volltext+Entity-Suche über alle drei Räume (brain, futursonanz, library). Gruppiert Treffer nach Entity, damit nicht 47 isolierte Hits sondern 8 thematische Cluster zurückkommen.",
+    "purpose": "Cross-Domain-Recherche. Beispiel: 'Was haben wir zu Lebendigkeit?' → gruppiert nach Entity (Andreas Weber, Heart-Space-Konzept, Erde-die-wir-sind-Buch), pro Gruppe Memories+Signals+Books.",
+    "readOnly": true,
+    "impact": "low"
+  },
+  "inputSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "query": {
+        "type": "string",
+        "minLength": 2,
+        "maxLength": 500,
+        "description": "Suchanfrage. Wird über Volltext + Embedding-Cosine ausgeführt."
+      },
+      "realms": {
+        "type": "array",
+        "items": { "type": "string", "enum": ["brain", "futursonanz", "library"] },
+        "uniqueItems": true,
+        "description": "Optional: Suche nur in diesen Räumen. Default: alle drei."
+      },
+      "entity_grouping": {
+        "type": "boolean",
+        "default": true,
+        "description": "true: Ergebnisse nach Entity gruppieren (empfohlen). false: flache Liste."
+      },
+      "since_days": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 365,
+        "description": "Optional: nur Items neuer als N Tage."
+      },
+      "min_similarity": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 1,
+        "default": 0.3,
+        "description": "Cosine-Schwelle für Embedding-Match. Niedrig = mehr Treffer."
+      },
+      "limit_per_realm": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 50,
+        "default": 10,
+        "description": "Max Treffer pro Realm."
+      }
+    },
+    "required": ["query"]
+  },
+  "outputSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "query": { "type": "string" },
+      "groups": {
+        "type": "array",
+        "description": "Wenn entity_grouping=true: Treffer gruppiert nach Entity. Sonst leere Liste, items in results[].",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "entity": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "id": { "type": "string", "format": "uuid" },
+                "canonical_name": { "type": "string" },
+                "entity_type": { "type": "string", "enum": ["person", "organization", "concept", "book", "work", "place"] }
+              },
+              "required": ["id", "canonical_name", "entity_type"]
+            },
+            "hits": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/realmHit" }
+            },
+            "summary": { "type": "string", "description": "Ein-Satz Zusammenfassung für UI-Display." }
+          },
+          "required": ["entity", "hits", "summary"]
+        }
+      },
+      "results": {
+        "type": "array",
+        "description": "Wenn entity_grouping=false: flache Trefferliste, sortiert nach similarity.",
+        "items": { "$ref": "#/$defs/realmHit" }
+      },
+      "total_hits": { "type": "integer", "minimum": 0 },
+      "world_model_version": { "type": "string" }
+    },
+    "required": ["query", "groups", "results", "total_hits", "world_model_version"]
+  },
+  "$defs": {
+    "realmHit": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "realm": { "type": "string", "enum": ["brain", "futursonanz", "library"] },
+        "realm_id": { "type": "string" },
+        "title": { "type": "string" },
+        "preview": { "type": "string", "maxLength": 300 },
+        "created_at": { "type": "string", "format": "date-time" },
+        "similarity": { "type": "number", "minimum": 0, "maximum": 1 },
+        "matched_via": { "type": "string", "enum": ["fulltext", "embedding", "entity_mention", "both"] }
+      },
+      "required": ["realm", "realm_id", "title", "preview", "similarity", "matched_via"]
+    }
+  },
+  "errorSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "code": {
+        "type": "string",
+        "enum": ["INVALID_INPUT", "INTERNAL_ERROR", "REALM_UNAVAILABLE"]
+      },
+      "message": { "type": "string" },
+      "affected_realm": { "type": ["string", "null"] }
+    },
+    "required": ["code", "message"]
+  },
+  "examples": [
+    {
+      "name": "happy-path-lebendigkeit",
+      "input": { "query": "Lebendigkeit", "since_days": 90 },
+      "output": {
+        "query": "Lebendigkeit",
+        "groups": [
+          {
+            "entity": {
+              "id": "9086b386-f052-440d-8303-a8398874b131",
+              "canonical_name": "Andreas Weber",
+              "entity_type": "person"
+            },
+            "hits": [
+              { "realm": "brain", "realm_id": "0173c2ac-...", "title": "Tiefenanalyse Weber-Resonanz", "preview": "...", "created_at": "2026-05-17T02:30:00Z", "similarity": 0.78, "matched_via": "both" },
+              { "realm": "library", "realm_id": "andreas-weber-erde-die-wir-sind", "title": "Erde, die wir sind", "preview": "...", "created_at": "2024-09-01T00:00:00Z", "similarity": 0.71, "matched_via": "embedding" }
+            ],
+            "summary": "Weber-Cluster: Heart-Space-Konzept + Tier-2-Profil + Mai-Memory"
+          },
+          {
+            "entity": {
+              "id": "88888888-8888-8888-8888-888888888888",
+              "canonical_name": "Heart-Space-Resonanz",
+              "entity_type": "concept"
+            },
+            "hits": [
+              { "realm": "brain", "realm_id": "cbe7df99-...", "title": "Status-Gespräch Schwarm", "preview": "...", "created_at": "2026-05-15T22:01:00Z", "similarity": 0.69, "matched_via": "entity_mention" }
+            ],
+            "summary": "Konzept-Cluster aus dem Achern-Wochenende"
+          }
+        ],
+        "results": [],
+        "total_hits": 3,
+        "world_model_version": "2026.05-v1"
+      }
+    },
+    {
+      "name": "edge-case-realm-unavailable",
+      "input": { "query": "Stripe", "realms": ["library"] },
+      "output": {
+        "query": "Stripe",
+        "groups": [],
+        "results": [],
+        "total_hits": 0,
+        "world_model_version": "2026.05-v1"
+      }
+    }
+  ]
+}

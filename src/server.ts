@@ -20,6 +20,12 @@ import { prepareEmbeddingText } from './embedding/provider.js';
 import { find } from './search/find.js';
 import { emerge } from './emerge/emerge.js';
 import { CATEGORIES, CATEGORY_LABELS, type Category, type Memory } from './types.js';
+import {
+  entityFindInputSchema,
+  entityLinksInputSchema,
+  decisionTraceInputSchema,
+  crossRealmSearchInputSchema,
+} from './generated/entity-tools.js';
 
 const CategoryEnum = z.enum(CATEGORIES as unknown as [string, ...string[]]);
 
@@ -537,6 +543,109 @@ export function createBrainServer(
         }],
       };
     }
+  );
+
+  // -------------------------------------------------------------------------
+  // Zwischenschicht-Tools (Library V3 §4.2 Spec-First)
+  // Schemas leben in generated/entity-tools.ts (Single-Source-of-Truth: specs/entity/*).
+  // -------------------------------------------------------------------------
+
+  // --- entity_find: Telefonbuch-Lookup ---
+  server.tool(
+    'entity_find',
+    'Telefonbuch-Lookup. Finde eine Entity (Person/Organisation/Konzept/Buch/Werk/Ort) per Name oder Alias und liefere alle Mentions cross-realm (brain, futursonanz, library).',
+    entityFindInputSchema.shape,
+    async (args) => {
+      if (typeof storage.entityFind !== 'function') {
+        return {
+          isError: true,
+          content: [{
+            type: 'text' as const,
+            text: 'entity_find ist nur in PostgreSQL-Backend verfügbar (Zwischenschicht-Tabellen). Aktuelles Backend hat keine entities-Tabelle.',
+          }],
+        };
+      }
+      const result = await storage.entityFind(args.query, {
+        entity_type: args.entity_type,
+        realm_filter: args.realm_filter,
+        limit: args.limit,
+      });
+      if (result.match_count === 0) {
+        return {
+          content: [{ type: 'text' as const, text: `Keine Entity gefunden für "${args.query}".` }],
+        };
+      }
+      const lines: string[] = [];
+      lines.push(`**${result.match_count} ${result.match_count === 1 ? 'Entity' : 'Entities'} gefunden**${result.ambiguous ? ' (ambig)' : ''}`);
+      for (const e of result.entities) {
+        lines.push('');
+        lines.push(`### ${e.canonical_name} [${e.entity_type}]`);
+        lines.push(`- id: \`${e.id}\``);
+        if (e.aliases.length > 0) lines.push(`- aliases: ${e.aliases.map((a) => `\`${a}\``).join(', ')}`);
+        if (e.notes) lines.push(`- notes: ${e.notes}`);
+        if (e.mentions.length === 0) {
+          lines.push(`- mentions: _keine_`);
+        } else {
+          const byRealm: Record<string, number> = {};
+          for (const m of e.mentions) byRealm[m.realm] = (byRealm[m.realm] ?? 0) + 1;
+          lines.push(`- mentions: ${Object.entries(byRealm).map(([r, c]) => `${r}=${c}`).join(', ')} (total ${e.mentions.length})`);
+          const sample = e.mentions.slice(0, 5);
+          for (const m of sample) {
+            lines.push(`  - \`${m.realm}.${m.realm_table}/${m.realm_id}\` (confidence ${m.confidence.toFixed(2)})`);
+          }
+          if (e.mentions.length > 5) lines.push(`  - … ${e.mentions.length - 5} weitere`);
+        }
+      }
+      return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
+    },
+  );
+
+  // --- entity_links: Karte (Stub bis Phase 2 Edge-Extraction live) ---
+  server.tool(
+    'entity_links',
+    'Karte. Liefere alle Edges (Beziehungen), die an einer Entity hängen — eingehend, ausgehend oder beidseitig.',
+    entityLinksInputSchema.shape,
+    async (args) => {
+      void args;
+      return {
+        content: [{
+          type: 'text' as const,
+          text: 'entity_links: Edges-Tabelle ist bis Phase 2 (Edge-Extraction) leer. Tool wird scharf, sobald LLM-extrahierte Edges vorhanden sind. Plan: docs/plans/20260518_zwischenschicht-knowledge-layer.md Phase 2.',
+        }],
+      };
+    },
+  );
+
+  // --- decision_trace: Quellen-Chain (Stub bis Phase 3) ---
+  server.tool(
+    'decision_trace',
+    'Quellen-Chain für einen Anchor. Liefere die Memories/Signals/Bücher die wahrscheinlich zur Entscheidung beigetragen haben — mit Rolle (evidence/trigger/counter), Score und optional Confirmation-Status.',
+    decisionTraceInputSchema.shape,
+    async (args) => {
+      void args;
+      return {
+        content: [{
+          type: 'text' as const,
+          text: 'decision_trace: decision_traces-Tabelle ist bis Phase 3 leer. Tool wird scharf, sobald Trace-Detector live ist. Plan: docs/plans/20260518_zwischenschicht-knowledge-layer.md Phase 3.',
+        }],
+      };
+    },
+  );
+
+  // --- cross_realm_search: Volltext+Entity über drei Räume (Stub V1) ---
+  server.tool(
+    'cross_realm_search',
+    'Volltext+Entity-Suche über alle drei Räume (brain, futursonanz, library). Gruppiert Treffer nach Entity, damit nicht 47 isolierte Hits sondern 8 thematische Cluster zurückkommen.',
+    crossRealmSearchInputSchema.shape,
+    async (args) => {
+      void args;
+      return {
+        content: [{
+          type: 'text' as const,
+          text: 'cross_realm_search: Cross-DB-Implementation pending. Brain-only-Suche bereits via entity_find verfügbar; Futursonanz-Mentions sind seit Phase 1c im Brain verlinkt — Cross-Realm-Volltext-Join folgt in V2.',
+        }],
+      };
+    },
   );
 
   return server;

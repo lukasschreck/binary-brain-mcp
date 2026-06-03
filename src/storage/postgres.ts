@@ -5,7 +5,14 @@
  * Requires PostgreSQL with pgvector extension.
  */
 
-import type { StorageAdapter, MemoryInsert } from './adapter.js';
+import type {
+  StorageAdapter,
+  MemoryInsert,
+  EntityFindOpts,
+  EntityFindResult,
+  EntityRecord,
+  EntityMention,
+} from './adapter.js';
 import type { Memory, MemoryWithSimilarity, ScanFilter, CategoryStats, Category } from '../types.js';
 import type { Pool as PgPool } from 'pg';
 
@@ -370,6 +377,87 @@ export class PostgresAdapter implements StorageAdapter {
     return {
       where: conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '',
       params,
+    };
+  }
+
+  // ---------------------------------------------------------------------
+  // Zwischenschicht: entity_find
+  // ---------------------------------------------------------------------
+  async entityFind(query: string, opts: EntityFindOpts): Promise<EntityFindResult> {
+    const limit = Math.max(1, Math.min(20, opts.limit ?? 5));
+    const params: unknown[] = [query.trim().toLowerCase()];
+    const conds: string[] = [
+      `(LOWER(canonical_name) = $1 OR EXISTS (SELECT 1 FROM unnest(aliases) a WHERE LOWER(a) = $1))`,
+    ];
+    let p = 2;
+    if (opts.entity_type) {
+      conds.push(`entity_type = $${p++}`);
+      params.push(opts.entity_type);
+    }
+    params.push(limit);
+    const entityRows = await this.pool.query(
+      `SELECT id, canonical_name, entity_type, aliases, notes, world_model_version
+       FROM entities
+       WHERE ${conds.join(' AND ')}
+       ORDER BY canonical_name
+       LIMIT $${p}`,
+      params,
+    );
+
+    if (entityRows.rowCount === 0) {
+      return { entities: [], match_count: 0, ambiguous: false };
+    }
+
+    const ids: string[] = entityRows.rows.map((r: { id: string }) => r.id);
+    const mentionParams: unknown[] = [ids];
+    let mp = 2;
+    let realmCond = '';
+    if (opts.realm_filter && opts.realm_filter.length > 0) {
+      realmCond = ` AND realm = ANY($${mp++})`;
+      mentionParams.push(opts.realm_filter);
+    }
+    const mentionRows = await this.pool.query(
+      `SELECT entity_id, realm, realm_table, realm_id, realm_field, confidence
+       FROM entity_mentions
+       WHERE entity_id = ANY($1)${realmCond}
+       ORDER BY confidence DESC`,
+      mentionParams,
+    );
+
+    const byEntity = new Map<string, EntityMention[]>();
+    for (const m of mentionRows.rows) {
+      const arr = byEntity.get(m.entity_id) ?? [];
+      arr.push({
+        realm: m.realm,
+        realm_table: m.realm_table,
+        realm_id: m.realm_id,
+        realm_field: m.realm_field ?? null,
+        confidence: Number(m.confidence),
+      });
+      byEntity.set(m.entity_id, arr);
+    }
+
+    const entities: EntityRecord[] = entityRows.rows.map((r: {
+      id: string;
+      canonical_name: string;
+      entity_type: EntityRecord['entity_type'];
+      aliases: string[] | null;
+      notes: string | null;
+      world_model_version: string | null;
+    }) => ({
+      id: r.id,
+      canonical_name: r.canonical_name,
+      entity_type: r.entity_type,
+      aliases: r.aliases ?? [],
+      notes: r.notes ?? null,
+      world_model_version: r.world_model_version ?? null,
+      mentions: byEntity.get(r.id) ?? [],
+    }));
+
+    return {
+      entities,
+      match_count: entities.length,
+      ambiguous: entities.length > 1,
     };
   }
 

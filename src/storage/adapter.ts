@@ -47,4 +47,51 @@ export interface StorageAdapter {
 
   /** Increment access_count and update last_accessed_at */
   touch(id: string): Promise<void>;
+
+  // --- Zwischenschicht (Entity-Layer, optional) ---
+  //
+  // Diese Methoden sind optional und werfen NotSupportedError in SQLite-Backends,
+  // wo die Zwischenschicht-Tabellen (entities, entity_mentions, edges, decision_traces)
+  // nicht existieren. Postgres-Backend (binarybrain-core) hat sie ab Migration
+  // 20260523150000_zwischenschicht_v1.
+
+  /** Find entities by name or alias, return matching entities + their mentions cross-realm. */
+  entityFind?(query: string, opts: EntityFindOpts): Promise<EntityFindResult>;
+}
+
+export interface EntityFindOpts {
+  entity_type?: 'person' | 'organization' | 'concept' | 'book' | 'work' | 'place';
+  realm_filter?: Array<'brain' | 'futursonanz' | 'library'>;
+  limit?: number;
+}
+
+export interface EntityRecord {
+  id: string;
+  canonical_name: string;
+  entity_type: 'person' | 'organization' | 'concept' | 'book' | 'work' | 'place';
+  aliases: string[];
+  notes: string | null;
+  world_model_version: string | null;
+  mentions: EntityMention[];
+}
+
+export interface EntityMention {
+  realm: 'brain' | 'futursonanz' | 'library';
+  realm_table: string;
+  realm_id: string;
+  realm_field: string | null;
+  confidence: number;
+}
+
+export interface EntityFindResult {
+  entities: EntityRecord[];
+  match_count: number;
+  ambiguous: boolean;
+}
+
+export class NotSupportedError extends Error {
+  constructor(public readonly methodName: string, public readonly backend: string) {
+    super(`${methodName} is not supported in ${backend} backend`);
+    this.name = 'NotSupportedError';
+  }
 }

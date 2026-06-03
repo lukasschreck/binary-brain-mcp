@@ -1,0 +1,186 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://binary-brain-mcp.futursonanz.local/specs/entity/entity_links/0.1.0",
+  "specVersion": "0.1.0",
+  "tool": {
+    "name": "entity_links",
+    "description": "Karte. Liefere alle Edges (Beziehungen), die an einer Entity hängen — eingehend, ausgehend oder beides — plus die jeweils verbundenen Entities.",
+    "purpose": "Beziehungs-Exploration. Beispiel: 'Welche Beziehungen hat Weber im System?' → schrieb 3 Bücher, öffnete für Lukas Lebendigkeit, wurde zitiert von 5 Memories.",
+    "readOnly": true,
+    "impact": "low",
+    "worldModelDependency": "predicate-vocabulary.md (15 Predicates V1, deutsch)"
+  },
+  "inputSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "entity_id": {
+        "type": "string",
+        "format": "uuid",
+        "description": "Kanonische Entity-ID aus entity_find."
+      },
+      "predicates": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "enum": [
+            "schrieb", "gab_heraus", "uebersetzte",
+            "zitierte", "nannte",
+            "traf", "war_bei",
+            "oeffnete_fuer", "praegte", "spiegelte",
+            "widerspricht", "stuetzt",
+            "entschied_fuer", "entschied_gegen",
+            "arbeitet_bei", "gehoert_zu"
+          ]
+        },
+        "uniqueItems": true,
+        "description": "Optional: Filter auf bestimmte Predicates. ENUM-Form ASCII (Code-Identifier-Regel aus conventions.md). Display-Form mit Umlauten via Frontend-Mapping. Bei null/leer alle."
+      },
+      "direction": {
+        "type": "string",
+        "enum": ["outgoing", "incoming", "both"],
+        "default": "both",
+        "description": "outgoing: entity_id ist Subject. incoming: entity_id ist Object. both: beide."
+      },
+      "min_confidence": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 1,
+        "default": 0.5,
+        "description": "Edges unter dieser Confidence werden ausgeblendet."
+      },
+      "include_proposed": {
+        "type": "boolean",
+        "default": false,
+        "description": "true: auch unbestätigte LLM-Vorschläge (review_status='proposed'). false: nur confirmed+auto."
+      },
+      "limit": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 100,
+        "default": 30
+      }
+    },
+    "required": ["entity_id"]
+  },
+  "outputSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "edges": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "id": { "type": "string", "format": "uuid" },
+            "subject_id": { "type": "string", "format": "uuid" },
+            "predicate": { "type": "string" },
+            "object_id": { "type": "string", "format": "uuid" },
+            "object_qualifier": { "type": ["string", "null"], "description": "Optionales Konzept als Inhalt des Predicates" },
+            "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+            "origin": { "type": "string", "enum": ["manual", "llm", "realm_field"] },
+            "review_status": { "type": "string", "enum": ["auto", "proposed", "confirmed", "rejected"] },
+            "valid_from": { "type": ["string", "null"], "format": "date-time" },
+            "valid_until": { "type": ["string", "null"], "format": "date-time" },
+            "quote": { "type": ["string", "null"], "description": "Originalzitat aus der Quelle" },
+            "world_model_version": { "type": "string" },
+            "llm_decision_id": { "type": ["string", "null"], "format": "uuid" }
+          },
+          "required": ["id", "subject_id", "predicate", "object_id", "confidence", "origin", "review_status", "world_model_version"]
+        }
+      },
+      "related_entities": {
+        "type": "array",
+        "description": "Entities, die auf der Gegenseite einer Edge stehen — vorgeladen für UI-Anzeige",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "id": { "type": "string", "format": "uuid" },
+            "canonical_name": { "type": "string" },
+            "entity_type": { "type": "string", "enum": ["person", "organization", "concept", "book", "work", "place"] }
+          },
+          "required": ["id", "canonical_name", "entity_type"]
+        }
+      },
+      "total_edges": { "type": "integer", "minimum": 0 },
+      "filtered_out_low_confidence": { "type": "integer", "minimum": 0 }
+    },
+    "required": ["edges", "related_entities", "total_edges", "filtered_out_low_confidence"]
+  },
+  "errorSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "code": {
+        "type": "string",
+        "enum": ["ENTITY_NOT_FOUND", "INVALID_INPUT", "INTERNAL_ERROR"]
+      },
+      "message": { "type": "string" }
+    },
+    "required": ["code", "message"]
+  },
+  "examples": [
+    {
+      "name": "happy-path-weber-outgoing",
+      "input": {
+        "entity_id": "9086b386-f052-440d-8303-a8398874b131",
+        "direction": "outgoing"
+      },
+      "output": {
+        "edges": [
+          {
+            "id": "11111111-1111-1111-1111-111111111111",
+            "subject_id": "9086b386-f052-440d-8303-a8398874b131",
+            "predicate": "schrieb",
+            "object_id": "22222222-2222-2222-2222-222222222222",
+            "object_qualifier": null,
+            "confidence": 1.0,
+            "origin": "manual",
+            "review_status": "confirmed",
+            "valid_from": "2010-01-01T00:00:00Z",
+            "valid_until": null,
+            "quote": null,
+            "world_model_version": "2026.05-v1",
+            "llm_decision_id": null
+          },
+          {
+            "id": "33333333-3333-3333-3333-333333333333",
+            "subject_id": "9086b386-f052-440d-8303-a8398874b131",
+            "predicate": "öffnete_für",
+            "object_id": "44444444-4444-4444-4444-444444444444",
+            "object_qualifier": "Lebendigkeit",
+            "confidence": 0.92,
+            "origin": "llm",
+            "review_status": "confirmed",
+            "valid_from": null,
+            "valid_until": null,
+            "quote": "Weber öffnete Lukas die Lebendigkeit als Erkenntnis-Modus",
+            "world_model_version": "2026.05-v1",
+            "llm_decision_id": "55555555-5555-5555-5555-555555555555"
+          }
+        ],
+        "related_entities": [
+          { "id": "22222222-2222-2222-2222-222222222222", "canonical_name": "Erde, die wir sind", "entity_type": "book" },
+          { "id": "44444444-4444-4444-4444-444444444444", "canonical_name": "Lukas", "entity_type": "person" }
+        ],
+        "total_edges": 2,
+        "filtered_out_low_confidence": 0
+      }
+    },
+    {
+      "name": "edge-case-filtered-by-confidence",
+      "input": {
+        "entity_id": "9086b386-f052-440d-8303-a8398874b131",
+        "min_confidence": 0.95
+      },
+      "output": {
+        "edges": [],
+        "related_entities": [],
+        "total_edges": 0,
+        "filtered_out_low_confidence": 7
+      }
+    }
+  ]
+}

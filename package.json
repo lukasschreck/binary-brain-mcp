@@ -15,7 +15,8 @@
     "start:http": "node dist/http.js",
     "init": "tsx setup/wizard.ts",
     "type-check": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "codegen:entity-specs": "tsx scripts/codegen-entity-specs.ts"
   },
   "keywords": [
     "mcp",
