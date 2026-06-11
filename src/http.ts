@@ -51,7 +51,7 @@ async function main() {
 
     // New session
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: () => crypto.randomUUID() });
-    const server = createBrainServer(storage, embedding, config.owner);
+    const server = createBrainServer(storage, embedding, config.owner, config.crossRealm ?? null);
 
     transport.onclose = () => {
       const sid = [...sessions.entries()].find(([, t]) => t === transport)?.[0];

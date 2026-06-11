@@ -10,7 +10,7 @@ import { createBrainServer } from './server.js';
 
 async function main() {
   const { config, storage, embedding } = await bootstrap();
-  const server = createBrainServer(storage, embedding, config.owner);
+  const server = createBrainServer(storage, embedding, config.owner, config.crossRealm ?? null);
   const transport = new StdioServerTransport();
 
   await server.connect(transport);

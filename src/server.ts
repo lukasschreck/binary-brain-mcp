@@ -14,10 +14,11 @@
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import type { StorageAdapter } from './storage/adapter.js';
+import type { StorageAdapter, CrossRealmSearchResult, RealmHit } from './storage/adapter.js';
 import type { EmbeddingProvider } from './embedding/provider.js';
 import { prepareEmbeddingText } from './embedding/provider.js';
 import { find } from './search/find.js';
+import { fetchV3Hits, type CrossRealmV3Config } from './search/cross-realm-v3.js';
 import { emerge } from './emerge/emerge.js';
 import { CATEGORIES, CATEGORY_LABELS, type Category, type Memory } from './types.js';
 import {
@@ -78,10 +79,54 @@ function renderMemoryEntry(m: Memory, index: number, opts: RenderOptions = {}): 
   return lines.join('\n');
 }
 
+function renderCrossRealmHit(h: RealmHit): string {
+  const sim = h.similarity.toFixed(2);
+  const preview = h.preview
+    ? ` — ${h.preview.slice(0, 120)}${h.preview.length > 120 ? '…' : ''}`
+    : '';
+  return `- \`${h.realm}/${h.realm_id}\` **${h.title}** (sim ${sim}, ${h.matched_via})${preview}`;
+}
+
+function renderCrossRealm(r: CrossRealmSearchResult, depth: 'resonance' | 'deep', note: string): string {
+  const lines: string[] = [];
+  lines.push(`**cross_realm_search** · query: „${r.query}" · depth: ${depth} · ${r.total_hits} Treffer`);
+
+  if (r.total_hits === 0) {
+    lines.push('');
+    lines.push('_Kein Treffer._' + (depth === 'resonance'
+      ? ' Tipp: `depth: "deep"` sucht zusätzlich im vollen Live-Korpus (Kiosk + Library).'
+      : ''));
+    if (note) lines.push(`_${note}_`);
+    return lines.join('\n');
+  }
+
+  for (const g of r.groups) {
+    lines.push('');
+    lines.push(`### ${g.entity.canonical_name} [${g.entity.entity_type}]`);
+    lines.push(`_${g.summary}_`);
+    for (const h of g.hits) lines.push(renderCrossRealmHit(h));
+  }
+
+  if (r.results.length > 0) {
+    lines.push('');
+    lines.push(`### Ohne Entity-Zuordnung (${r.results.length})`);
+    for (const h of r.results) lines.push(renderCrossRealmHit(h));
+  }
+
+  lines.push('');
+  lines.push('---');
+  lines.push(`_world_model: ${r.world_model_version} · ${depth === 'resonance'
+    ? 'Abdeckung = Brain-Resonanzschicht (nicht Voll-Korpus) — `depth:"deep"` für Live-Suche'
+    : 'Live-Voll-Korpus (Kiosk + Library) + Resonanzschicht'}_`);
+  if (note) lines.push(`_${note}_`);
+  return lines.join('\n');
+}
+
 export function createBrainServer(
   storage: StorageAdapter,
   embedding: EmbeddingProvider,
-  defaultOwner: string
+  defaultOwner: string,
+  crossRealmConfig?: CrossRealmV3Config | null
 ): McpServer {
   const server = new McpServer({
     name: 'binary-brain-mcp',
@@ -632,19 +677,69 @@ export function createBrainServer(
     },
   );
 
-  // --- cross_realm_search: Volltext+Entity über drei Räume (Stub V1) ---
+  // --- cross_realm_search: Volltext+Entity über drei Räume (V2 Resonanz / V3 deep) ---
   server.tool(
     'cross_realm_search',
-    'Volltext+Entity-Suche über alle drei Räume (brain, futursonanz, library). Gruppiert Treffer nach Entity, damit nicht 47 isolierte Hits sondern 8 thematische Cluster zurückkommen.',
-    crossRealmSearchInputSchema.shape,
+    'Volltext+Entity-Suche über alle drei Räume (brain, futursonanz, library), gruppiert nach Entity. depth=resonance (Default): schnell aus der Brain-Resonanzschicht. depth=deep: zusätzlich Live-Suche im vollen Kiosk- und Library-Korpus.',
+    {
+      ...crossRealmSearchInputSchema.shape,
+      owner: z.string().default(defaultOwner).describe('Wessen Resonanzschicht/Memories durchsuchen?'),
+    },
     async (args) => {
-      void args;
-      return {
-        content: [{
-          type: 'text' as const,
-          text: 'cross_realm_search: Cross-DB-Implementation pending. Brain-only-Suche bereits via entity_find verfügbar; Futursonanz-Mentions sind seit Phase 1c im Brain verlinkt — Cross-Realm-Volltext-Join folgt in V2.',
-        }],
-      };
+      if (typeof storage.crossRealmSearch !== 'function') {
+        return {
+          isError: true,
+          content: [{
+            type: 'text' as const,
+            text: 'cross_realm_search ist nur im PostgreSQL-Backend verfügbar (Zwischenschicht-Tabellen entities/entity_mentions/*_resonances). Aktuelles Backend unterstützt es nicht.',
+          }],
+        };
+      }
+
+      const depth: 'resonance' | 'deep' = args.depth ?? 'resonance';
+      const brainQueryEmbedding = embedding.type !== 'none'
+        ? await embedding.embed(prepareEmbeddingText(args.query, ''))
+        : null;
+
+      // V3 (depth='deep'): Live-Korpus via Edge Function → external_hits.
+      let externalHits: RealmHit[] | undefined = undefined;
+      let v3Note = '';
+      if (depth === 'deep') {
+        if (!crossRealmConfig) {
+          v3Note = 'V3 nicht konfiguriert (crossRealm.functionUrl/token fehlen in ~/.brain/config.json) — nur Resonanzschicht durchsucht.';
+        } else {
+          const v3 = await fetchV3Hits(crossRealmConfig, {
+            query: args.query,
+            realms: args.realms,
+            since_days: args.since_days,
+            min_similarity: args.min_similarity,
+            limit_per_realm: args.limit_per_realm,
+          });
+          if (v3.ok) {
+            externalHits = v3.hits;
+            const notes = [`Live-Korpus: ${v3.hits.length} Treffer`];
+            if (v3.affected_realms.length > 0) notes.push(`Live nicht verfügbar: ${v3.affected_realms.join(', ')}`);
+            notes.push('Kiosk-Live max 7 Tage (Statement-Timeout), Library voller Korpus');
+            v3Note = notes.join(' · ');
+          } else {
+            v3Note = `Live-Suche fehlgeschlagen (${v3.error ?? 'unbekannt'}) — nur Resonanzschicht.`;
+          }
+        }
+      }
+
+      const result = await storage.crossRealmSearch(args.query, {
+        owner: args.owner,
+        realms: args.realms,
+        depth,
+        entity_grouping: args.entity_grouping,
+        since_days: args.since_days,
+        min_similarity: args.min_similarity,
+        limit_per_realm: args.limit_per_realm,
+        brain_query_embedding: brainQueryEmbedding,
+        external_hits: externalHits,
+      });
+
+      return { content: [{ type: 'text' as const, text: renderCrossRealm(result, depth, v3Note) }] };
     },
   );
 

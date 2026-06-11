@@ -1,10 +1,10 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://binary-brain-mcp.futursonanz.local/specs/entity/cross_realm_search/0.1.0",
-  "specVersion": "0.1.0",
+  "$id": "https://binary-brain-mcp.futursonanz.local/specs/entity/cross_realm_search/0.2.0",
+  "specVersion": "0.2.0",
   "tool": {
     "name": "cross_realm_search",
-    "description": "Volltext+Entity-Suche über alle drei Räume (brain, futursonanz, library). Gruppiert Treffer nach Entity, damit nicht 47 isolierte Hits sondern 8 thematische Cluster zurückkommen.",
+    "description": "Volltext+Entity-Suche über alle drei Räume (brain, futursonanz, library). Gruppiert Treffer nach Entity, damit nicht 47 isolierte Hits sondern 8 thematische Cluster zurückkommen. depth=resonance (Default) sucht schnell in der Brain-Resonanzschicht; depth=deep zieht zusätzlich live aus dem vollen Kiosk- und Library-Korpus.",
     "purpose": "Cross-Domain-Recherche. Beispiel: 'Was haben wir zu Lebendigkeit?' → gruppiert nach Entity (Andreas Weber, Heart-Space-Konzept, Erde-die-wir-sind-Buch), pro Gruppe Memories+Signals+Books.",
     "readOnly": true,
     "impact": "low"
@@ -24,6 +24,12 @@
         "items": { "type": "string", "enum": ["brain", "futursonanz", "library"] },
         "uniqueItems": true,
         "description": "Optional: Suche nur in diesen Räumen. Default: alle drei."
+      },
+      "depth": {
+        "type": "string",
+        "enum": ["resonance", "deep"],
+        "default": "resonance",
+        "description": "resonance (Default): schnell, nur Brain-Resonanzschicht (brain_resonances/library_resonances + Brain-Volltext/-Embedding + entity_mentions), offline-fähig. deep: zusätzlich Live-Suche im vollen Kiosk-Signal- und Library-Bücher-Korpus via Edge Function (langsamer, exhaustiver)."
       },
       "entity_grouping": {
         "type": "boolean",

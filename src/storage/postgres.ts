@@ -12,8 +12,19 @@ import type {
   EntityFindResult,
   EntityRecord,
   EntityMention,
+  Realm,
+  RealmHit,
+  MatchedVia,
+  CrossRealmSearchOpts,
+  CrossRealmSearchResult,
 } from './adapter.js';
 import type { Memory, MemoryWithSimilarity, ScanFilter, CategoryStats, Category } from '../types.js';
+import {
+  clamp01,
+  foldExternalHits,
+  assembleResult,
+  type EntityRef,
+} from '../search/cross-realm-assemble.js';
 import type { Pool as PgPool } from 'pg';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -459,6 +470,190 @@ export class PostgresAdapter implements StorageAdapter {
       match_count: entities.length,
       ambiguous: entities.length > 1,
     };
+  }
+
+  async crossRealmSearch(query: string, opts: CrossRealmSearchOpts): Promise<CrossRealmSearchResult> {
+    const realms: Realm[] = opts.realms && opts.realms.length > 0
+      ? opts.realms
+      : ['brain', 'futursonanz', 'library'];
+    const limit = Math.max(1, Math.min(50, opts.limit_per_realm ?? 10));
+    const minSim = opts.min_similarity ?? 0.3;
+    const FULLTEXT_FLOOR = 0.3;
+    const ilikePat = `%${query.trim()}%`;
+
+    const maps: Record<Realm, Map<string, RealmHit>> = {
+      brain: new Map(),
+      futursonanz: new Map(),
+      library: new Map(),
+    };
+    let brainMemoryIds: string[] = [];
+
+    // --- Brain: Volltext + Vector (bestehende Helfer) ---
+    if (realms.includes('brain')) {
+      const filter: ScanFilter = { owner: opts.owner, limit };
+      const ftsRows = await this.fulltext(query, filter);
+      const vecRows = opts.brain_query_embedding && opts.brain_query_embedding.length > 0
+        ? await this.vectorSearch(opts.brain_query_embedding, filter, minSim)
+        : [];
+      for (const m of vecRows) {
+        maps.brain.set(m.id, this.brainHit(m, m.similarity, 'embedding'));
+      }
+      for (const m of ftsRows) {
+        const existing = maps.brain.get(m.id);
+        if (existing) existing.matched_via = 'both';
+        else maps.brain.set(m.id, this.brainHit(m, FULLTEXT_FLOOR, 'fulltext'));
+      }
+      brainMemoryIds = [...maps.brain.keys()];
+    } else if (opts.brain_query_embedding && opts.brain_query_embedding.length > 0) {
+      // Brain nicht im Output, aber Vector-Treffer dienen als Resonanz-Pivot für futursonanz/library
+      const vecRows = await this.vectorSearch(
+        opts.brain_query_embedding, { owner: opts.owner, limit }, minSim,
+      );
+      brainMemoryIds = vecRows.map((m) => m.id);
+    }
+
+    // --- Futursonanz: brain_resonances (Volltext auf signal_title + Resonanz-Pivot) ---
+    if (realms.includes('futursonanz')) {
+      const rows = await this.pool.query(
+        `SELECT DISTINCT ON (signal_id)
+           signal_id, signal_title, cosine_similarity, matched_at,
+           (signal_title ILIKE $1) AS via_title,
+           (memory_id = ANY($2::uuid[])) AS via_embed
+         FROM brain_resonances
+         WHERE signal_title ILIKE $1 OR memory_id = ANY($2::uuid[])
+         ORDER BY signal_id, cosine_similarity DESC
+         LIMIT $3`,
+        [ilikePat, brainMemoryIds, limit * 3],
+      );
+      for (const r of rows.rows) {
+        const via: MatchedVia = r.via_title && r.via_embed ? 'both' : (r.via_title ? 'fulltext' : 'embedding');
+        maps.futursonanz.set(r.signal_id, {
+          realm: 'futursonanz',
+          realm_id: r.signal_id,
+          title: r.signal_title ?? `Signal ${String(r.signal_id).slice(0, 8)}`,
+          preview: (r.signal_title ?? '').slice(0, 300),
+          created_at: r.matched_at ? new Date(r.matched_at).toISOString() : undefined,
+          similarity: clamp01(Number(r.cosine_similarity)),
+          matched_via: via,
+        });
+      }
+      // Entity-Mention-Pfad: Signale, die über eine exakt getroffene Entity verlinkt sind
+      const mentionSignalIds = await this.entityMentionRealmIds(query, 'futursonanz');
+      for (const sid of mentionSignalIds) {
+        if (maps.futursonanz.has(sid)) continue;
+        maps.futursonanz.set(sid, {
+          realm: 'futursonanz',
+          realm_id: sid,
+          title: `Signal ${sid.slice(0, 8)}`,
+          preview: `signals/${sid}`,
+          similarity: FULLTEXT_FLOOR,
+          matched_via: 'entity_mention',
+        });
+      }
+    }
+
+    // --- Library: library_resonances (owner-scoped, Volltext auf title+passage + Pivot) ---
+    if (realms.includes('library')) {
+      const rows = await this.pool.query(
+        `SELECT DISTINCT ON (book_id)
+           book_id, book_title, passage, cosine_similarity, matched_at,
+           (book_title ILIKE $1 OR passage ILIKE $1) AS via_text,
+           (memory_id = ANY($3::uuid[])) AS via_embed
+         FROM library_resonances
+         WHERE owner = $2
+           AND (book_title ILIKE $1 OR passage ILIKE $1 OR memory_id = ANY($3::uuid[]))
+         ORDER BY book_id, cosine_similarity DESC
+         LIMIT $4`,
+        [ilikePat, opts.owner, brainMemoryIds, limit * 3],
+      );
+      for (const r of rows.rows) {
+        const via: MatchedVia = r.via_text && r.via_embed ? 'both' : (r.via_text ? 'fulltext' : 'embedding');
+        maps.library.set(r.book_id, {
+          realm: 'library',
+          realm_id: r.book_id,
+          title: r.book_title ?? 'Unbekanntes Buch',
+          preview: (r.passage ?? r.book_title ?? '').slice(0, 300),
+          created_at: r.matched_at ? new Date(r.matched_at).toISOString() : undefined,
+          similarity: clamp01(Number(r.cosine_similarity)),
+          matched_via: via,
+        });
+      }
+    }
+
+    // --- V3 external hits einfalten + Per-Realm-Cap + Entity-Grouping (pure Logik) ---
+    foldExternalHits(maps, opts.external_hits, realms);
+
+    if (opts.entity_grouping === false) {
+      return assembleResult(query, maps, { entity_grouping: false, limit_per_realm: limit }, new Map());
+    }
+
+    // Hits sammeln, um Entities nur für die tatsächlich relevanten realm_ids zu laden.
+    const previewHits: RealmHit[] = [];
+    for (const realm of ['brain', 'futursonanz', 'library'] as Realm[]) {
+      previewHits.push(...maps[realm].values());
+    }
+    const entityByKey = await this.entitiesForHits(previewHits);
+    return assembleResult(query, maps, { entity_grouping: true, limit_per_realm: limit }, entityByKey);
+  }
+
+  private brainHit(m: Memory, similarity: number, via: MatchedVia): RealmHit {
+    return {
+      realm: 'brain',
+      realm_id: m.id,
+      title: m.title,
+      preview: (m.content ?? '').slice(0, 300),
+      created_at: m.created_at instanceof Date ? m.created_at.toISOString() : undefined,
+      similarity: clamp01(similarity),
+      matched_via: via,
+    };
+  }
+
+  /** Exakt getroffene Entity (canonical/alias = query) → ihre realm_ids im gegebenen Realm. */
+  private async entityMentionRealmIds(query: string, realm: Realm): Promise<string[]> {
+    const q = query.trim().toLowerCase();
+    const res = await this.pool.query(
+      `SELECT em.realm_id
+       FROM entities e
+       JOIN entity_mentions em ON em.entity_id = e.id AND em.realm = $2
+       WHERE LOWER(e.canonical_name) = $1
+          OR EXISTS (SELECT 1 FROM unnest(e.aliases) a WHERE LOWER(a) = $1)
+       ORDER BY em.confidence DESC
+       LIMIT 50`,
+      [q, realm],
+    );
+    return res.rows.map((r: { realm_id: string }) => r.realm_id);
+  }
+
+  /** Mappt (realm, realm_id) der Hits auf ihre Entity (höchste confidence gewinnt). */
+  private async entitiesForHits(hits: RealmHit[]): Promise<Map<string, EntityRef>> {
+    const byKey = new Map<string, EntityRef>();
+    const byRealm: Partial<Record<Realm, string[]>> = {};
+    for (const h of hits) (byRealm[h.realm] ??= []).push(h.realm_id);
+
+    for (const realm of Object.keys(byRealm) as Realm[]) {
+      const ids = byRealm[realm]!;
+      if (ids.length === 0) continue;
+      const res = await this.pool.query(
+        `SELECT em.realm, em.realm_id, e.id, e.canonical_name, e.entity_type, e.world_model_version
+         FROM entity_mentions em
+         JOIN entities e ON e.id = em.entity_id
+         WHERE em.realm = $1 AND em.realm_id = ANY($2::text[])
+         ORDER BY em.confidence DESC`,
+        [realm, ids],
+      );
+      for (const r of res.rows) {
+        const key = `${r.realm}::${r.realm_id}`;
+        if (!byKey.has(key)) {
+          byKey.set(key, {
+            id: r.id,
+            canonical_name: r.canonical_name,
+            entity_type: r.entity_type,
+            world_model_version: r.world_model_version ?? null,
+          });
+        }
+      }
+    }
+    return byKey;
   }
 
   private rowToMemory(row: PgRow): Memory {

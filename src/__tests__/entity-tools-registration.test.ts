@@ -83,10 +83,11 @@ describe('Entity-Tools Server-Registrierung', () => {
     expect(() => crossRealmSearchInputSchema.parse({ query: 'X' })).toThrow();
   });
 
-  it('cross_realm_search Input-Schema akzeptiert vollständigen Input', () => {
+  it('cross_realm_search Input-Schema akzeptiert vollständigen Input inkl. depth', () => {
     const parsed = crossRealmSearchInputSchema.parse({
       query: 'Specification-These',
       realms: ['brain', 'library'],
+      depth: 'deep',
       entity_grouping: true,
       since_days: 30,
       min_similarity: 0.4,
@@ -94,9 +95,22 @@ describe('Entity-Tools Server-Registrierung', () => {
     });
     expect(parsed.query).toBe('Specification-These');
     expect(parsed.realms).toEqual(['brain', 'library']);
+    expect(parsed.depth).toBe('deep');
   });
 
-  it('SQLite-Backend hat entityFind nicht — Stub-Verhalten ist korrekt', () => {
+  it('cross_realm_search akzeptiert fehlendes depth (Handler defaultet via ?? resonance)', () => {
+    // Codegen erzeugt .default().optional() — bei fehlendem Key bleibt der Wert undefined
+    // (wie alle optionalen Felder); der Tool-Handler setzt den Default `?? 'resonance'`.
+    const parsed = crossRealmSearchInputSchema.parse({ query: 'Lebendigkeit' });
+    expect(parsed.depth).toBeUndefined();
+  });
+
+  it('cross_realm_search Input-Schema lehnt ungültiges depth ab', () => {
+    expect(() => crossRealmSearchInputSchema.parse({ query: 'Lebendigkeit', depth: 'shallow' })).toThrow();
+  });
+
+  it('SQLite-Backend hat weder entityFind noch crossRealmSearch — Guard greift', () => {
     expect(typeof (adapter as unknown as { entityFind?: unknown }).entityFind).toBe('undefined');
+    expect(typeof (adapter as unknown as { crossRealmSearch?: unknown }).crossRealmSearch).toBe('undefined');
   });
 });

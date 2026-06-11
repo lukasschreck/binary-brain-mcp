@@ -113,4 +113,10 @@ export interface BrainConfig {
     baseUrl: string;
     model?: string;       // default: nomic-embed-text
   };
+
+  /** V3 cross_realm_search deep-Suche: Edge Function `cross-realm-search` in binarybrain-core. */
+  crossRealm?: {
+    functionUrl: string;
+    token: string;
+  };
 }

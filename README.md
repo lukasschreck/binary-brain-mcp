@@ -312,6 +312,26 @@ PostgreSQL + Jina + Nightly Dreaming
 }
 ```
 
+### Zwischenschicht-Tools (PostgreSQL only)
+
+Mit dem Postgres-Backend (binarybrain-core) sind zusätzlich die Entity-Layer-Tools verfügbar:
+`entity_find` und **`cross_realm_search`** (Volltext+Entity über brain/futursonanz/library, gruppiert nach Entity).
+
+`cross_realm_search` hat zwei Tiefenstufen über den `depth`-Param:
+- **`resonance`** (Default): schnell, nur Brain-Resonanzschicht (`brain_resonances`/`library_resonances` + Brain-Volltext/-Embedding + `entity_mentions`). Offline-fähig, kein Extra-Setup.
+- **`deep`**: zusätzlich Live-Suche im vollen Kiosk- und Library-Korpus via Edge Function `cross-realm-search` (binarybrain-core). Benötigt den `crossRealm`-Block:
+
+```json
+{
+  "crossRealm": {
+    "functionUrl": "https://<project-ref>.supabase.co/functions/v1/cross-realm-search",
+    "token": "<CROSS_REALM_TOKEN — muss mit dem Vault-Secret der Edge Function übereinstimmen>"
+  }
+}
+```
+
+Ohne `crossRealm`-Block fällt `depth:deep` graceful auf die Resonanzschicht zurück (mit Hinweis im Output).
+
 ### Claude Desktop integration
 
 Add to your Claude Desktop config:

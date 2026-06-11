@@ -1,7 +1,7 @@
 // AUTO-GENERATED from specs/entity/*.spec.json — DO NOT EDIT
 // Codegen: scripts/codegen-entity-specs.ts
 // Run: npm run codegen:entity-specs
-// Generated at: 2026-05-28T18:48:04.611Z
+// Generated at: 2026-06-11T09:35:16.610Z
 //
 // Library V3 §4.2: Spec ist Single Source of Truth.
 // Wenn dieses File abweicht von den Specs: Codegen neu laufen lassen, NICHT manuell editieren.
@@ -10,7 +10,7 @@ import { z } from 'zod'
 
 // ============================================================================
 // cross_realm_search — Volltext+Entity-Suche über alle drei Räume (brain, futursonanz, library). Gruppiert Treffer nach Ent
-// Spec: specs/entity/cross_realm_search.spec.json (v0.1.0)
+// Spec: specs/entity/cross_realm_search.spec.json (v0.2.0)
 // ============================================================================
 
 // $defs (vorab definiert für $ref)
@@ -26,6 +26,7 @@ const realmHitSchema = z.object({
 export const crossRealmSearchInputSchema = z.object({
   "query": z.string().min(2).max(500),
   "realms": z.array(z.enum(["brain", "futursonanz", "library"] as const)).optional(),
+  "depth": z.enum(["resonance", "deep"] as const).default("resonance").optional(),
   "entity_grouping": z.boolean().default(true).optional(),
   "since_days": z.number().int().min(1).max(365).optional(),
   "min_similarity": z.number().min(0).max(1).default(0.3).optional(),
@@ -54,7 +55,7 @@ export type CrossRealmSearchOutput = z.infer<typeof crossRealmSearchOutputSchema
 
 export const crossRealmSearchTool = {
   name: "cross_realm_search",
-  description: "Volltext+Entity-Suche über alle drei Räume (brain, futursonanz, library). Gruppiert Treffer nach Entity, damit nicht 47 isolierte Hits sondern 8 thematische Cluster zurückkommen.",
+  description: "Volltext+Entity-Suche über alle drei Räume (brain, futursonanz, library). Gruppiert Treffer nach Entity, damit nicht 47 isolierte Hits sondern 8 thematische Cluster zurückkommen. depth=resonance (Default) sucht schnell in der Brain-Resonanzschicht; depth=deep zieht zusätzlich live aus dem vollen Kiosk- und Library-Korpus.",
   inputSchema:
   {
     "type": "object",
@@ -78,6 +79,15 @@ export const crossRealmSearchTool = {
         },
         "uniqueItems": true,
         "description": "Optional: Suche nur in diesen Räumen. Default: alle drei."
+      },
+      "depth": {
+        "type": "string",
+        "enum": [
+          "resonance",
+          "deep"
+        ],
+        "default": "resonance",
+        "description": "resonance (Default): schnell, nur Brain-Resonanzschicht (brain_resonances/library_resonances + Brain-Volltext/-Embedding + entity_mentions), offline-fähig. deep: zusätzlich Live-Suche im vollen Kiosk-Signal- und Library-Bücher-Korpus via Edge Function (langsamer, exhaustiver)."
       },
       "entity_grouping": {
         "type": "boolean",

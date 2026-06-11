@@ -57,6 +57,61 @@ export interface StorageAdapter {
 
   /** Find entities by name or alias, return matching entities + their mentions cross-realm. */
   entityFind?(query: string, opts: EntityFindOpts): Promise<EntityFindResult>;
+
+  /**
+   * Cross-Realm-Suche über brain/futursonanz/library, gruppiert nach Entity.
+   * V2 (depth='resonance'): Brain-Volltext/-Embedding + brain_resonances + library_resonances + entity_mentions.
+   * V3 (depth='deep'): die Live-Korpus-Treffer kommen als opts.external_hits rein (von der Edge Function)
+   * und werden hier mit den Resonanzschicht-Treffern gemerged, dedupliziert und gemeinsam gruppiert.
+   * Nur PostgreSQL-Backend (Zwischenschicht-Tabellen). SQLite wirft NotSupportedError.
+   */
+  crossRealmSearch?(query: string, opts: CrossRealmSearchOpts): Promise<CrossRealmSearchResult>;
+}
+
+export type Realm = 'brain' | 'futursonanz' | 'library';
+
+export type MatchedVia = 'fulltext' | 'embedding' | 'entity_mention' | 'both';
+
+export interface RealmHit {
+  realm: Realm;
+  realm_id: string;
+  title: string;
+  preview: string;
+  created_at?: string;
+  similarity: number;
+  matched_via: MatchedVia;
+}
+
+export interface CrossRealmGroup {
+  entity: {
+    id: string;
+    canonical_name: string;
+    entity_type: EntityRecord['entity_type'];
+  };
+  hits: RealmHit[];
+  summary: string;
+}
+
+export interface CrossRealmSearchOpts {
+  owner: string;
+  realms?: Realm[];
+  depth?: 'resonance' | 'deep';
+  entity_grouping?: boolean;
+  since_days?: number;
+  min_similarity?: number;
+  limit_per_realm?: number;
+  /** 256d Brain-Query-Embedding, im Tool-Layer berechnet. null/undefined → kein Brain-Vector-Pfad. */
+  brain_query_embedding?: number[] | null;
+  /** V3-Live-Treffer (Edge Function), werden in dieselbe Dedup+Grouping-Pipeline gefaltet. */
+  external_hits?: RealmHit[];
+}
+
+export interface CrossRealmSearchResult {
+  query: string;
+  groups: CrossRealmGroup[];
+  results: RealmHit[];
+  total_hits: number;
+  world_model_version: string;
 }
 
 export interface EntityFindOpts {
